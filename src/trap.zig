@@ -48,7 +48,7 @@ export fn handleTrap(frame: *TrapFrame) noreturn {
 
 export fn kernelTrapEntry() align(4) callconv(.naked) void {
     _ = asm volatile (
-        \\csrw sscratch, sp
+        \\csrrw sp, sscratch, sp
         \\addi sp, sp, -4 * 31
         \\sw ra,  4 * 0(sp)
         \\sw gp,  4 * 1(sp)
@@ -82,6 +82,10 @@ export fn kernelTrapEntry() align(4) callconv(.naked) void {
         \\sw s11, 4 * 29(sp)
         \\csrr a0, sscratch
         \\sw a0, 4 * 30(sp)
+        \\
+        \\addi a0, sp, 4 * 31
+        \\csrw sscratch, a0
+        \\
         \\mv a0, sp
         \\call handleTrap
         \\lw ra,  4 * 0(sp)

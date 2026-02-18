@@ -1,12 +1,14 @@
-pub const bss = @extern([*]u8, .{ .name = "__bss" });
-pub const bss_end = @extern([*]u8, .{ .name = "__bss_end" });
+const bss = @extern([*]u8, .{ .name = "__bss" });
+const bss_end = @extern([*]u8, .{ .name = "__bss_end" });
 pub const stack_top = @extern([*]u8, .{ .name = "__stack_top" });
 
-const free_ram = @extern([*]u8, .{ .name = "__free_ram" });
-const free_ram_end = @extern([*]u8, .{ .name = "__free_ram_end" });
+pub const free_ram = @extern([*]u8, .{ .name = "__free_ram" });
+pub const free_ram_end = @extern([*]u8, .{ .name = "__free_ram_end" });
+pub const kernel_base = @extern([*]u8, .{ .name = "__kernel_base" });
 
 pub const paddr = usize;
 pub const vaddr = usize;
+pub const PAGE_SIZE: usize = 4096;
 
 pub const Context = struct {
     process: process.ProcessHandler,

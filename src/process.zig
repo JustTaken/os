@@ -1,13 +1,12 @@
-// const List = collection.List(*Process);
-// const BackList = collection.List(Process);
 const List = std.DoublyLinkedList;
 
 pub const Process = struct {
-    pid: usize = 0,
-    sp: common.vaddr = 0,
-    stack: [STACK_SIZE]u8 align(4) = .{0} ** STACK_SIZE,
-    node: List.Node = .{},
-    prev: ?*Process = null,
+    pid: usize,
+    sp: common.vaddr,
+    stack: [STACK_SIZE]u8 align(4),
+    node: List.Node,
+    prev: ?*Process,
+    page_table: page.PageTable,
 
     const STACK_SIZE: usize = 8192;
 
@@ -16,29 +15,51 @@ pub const Process = struct {
             const next = &self.sp;
             const prev = &other.sp;
 
-            common.print("switching from {x} to {x}\n", .{ other.sp, self.sp }) catch @panic("PRINT");
-
             jump(prev, next);
         } else @panic("NO PREVIOUS PROCESS TO GO AFTER");
+    }
+
+    fn init(self: *Process, pid: usize, pc: usize, allocator: std.mem.Allocator) !void {
+        self.stack = .{0} ** STACK_SIZE;
+        self.prev = null;
+        self.pid = pid;
+
+        const register_count: usize = 13; // s0 - s11 + ra
+        const sp: [*]usize = @ptrCast(@alignCast(&self.stack[Process.STACK_SIZE - register_count * @sizeOf(usize)]));
+
+        sp[0] = pc;
+        for (1..register_count) |i| {
+            sp[i] = 0;
+        }
+
+        self.sp = @intFromPtr(sp);
+
+        self.page_table = try page.PageTable.init(allocator);
+        common.print("PROCESS PAGE TABLE: {*}\n", .{self.page_table.elements}) catch @panic("PRINT");
+        try self.page_table.mapAll(allocator);
     }
 };
 
 pub const ProcessHandler = struct {
-    unused: List = .{},
-    runnable: List = .{},
-    running: List = .{},
-    default: Process = .{},
+    unused: List,
+    runnable: List,
+    running: List,
+    default: Process,
     pid: usize = 1,
 
     pub const MAX_CHILDS: usize = 8;
 
     pub fn init(allocator: std.mem.Allocator) !ProcessHandler {
-        var self: ProcessHandler = .{};
+        var self: ProcessHandler = undefined;
+
+        self.unused = .{};
+        self.runnable = .{};
+        self.running = .{};
+
+        try self.default.init(0, 0, allocator);
 
         for (0..MAX_CHILDS) |_| {
             const process = allocator.create(Process) catch @panic("OUT OF MEMORY");
-
-            process.* = .{};
 
             self.unused.append(&process.node);
         }
@@ -61,28 +82,19 @@ pub const ProcessHandler = struct {
         return @fieldParentPtr("node", n);
     }
 
-    pub fn alloc(self: *ProcessHandler, pc: usize) !*Process {
+    pub fn alloc(self: *ProcessHandler, pc: usize, allocator: std.mem.Allocator) !*Process {
         const proc = self.getUnused() orelse return error.OutOfUnusedProcess;
 
         defer self.pid += 1;
 
-        const register_count: usize = 13; // s0 - s11 + ra
-        const sp: [*]usize = @ptrCast(@alignCast(&proc.stack[Process.STACK_SIZE - register_count * @sizeOf(usize)]));
-
-        sp[0] = pc;
-        for (1..register_count) |i| {
-            sp[i] = 0;
-        }
-
-        proc.pid = self.pid;
-        proc.sp = @intFromPtr(sp);
+        try proc.init(self.pid, pc, allocator);
 
         self.runnable.append(&proc.node);
 
         return proc;
     }
 
-    pub fn nextToRun(self: *ProcessHandler) *Process {
+    pub fn runNext(self: *ProcessHandler) void {
         const runnable = self.getRunnable() orelse @panic("OUT OF RUNNABLE PROCESS");
 
         if (self.getRunning()) |running| {
@@ -94,7 +106,24 @@ pub const ProcessHandler = struct {
 
         self.running.append(&runnable.node);
 
-        return runnable;
+        const runnable_stack: usize = @intFromPtr(&runnable.stack[0]) + Process.STACK_SIZE;
+
+        const sat_mode = page.Sat{ .sv32 = true };
+        const runnable_page = sat_mode.maskAddr(runnable.page_table.ptr());
+
+        common.print("SWAPPING PAGE TABLE: {*}\n", .{runnable.page_table.elements}) catch @panic("PRINT");
+
+        _ = asm volatile (
+            \\sfence.vma
+            \\csrw satp, %[satp]
+            \\sfence.vma
+            \\csrw sscratch, %[sscratch]
+            :
+            : [sscratch] "r" (runnable_stack),
+              [satp] "r" (runnable_page),
+        );
+
+        runnable.run();
     }
 };
 
@@ -130,6 +159,7 @@ pub noinline fn jump(prev: *usize, next: *usize) void {
         \\lw s10, 11 * 4(sp)
         \\lw s11, 12 * 4(sp)
         \\addi sp, sp, 13 * 4
+        \\ret
         :
         : [arg0] "r" (prev),
           [arg1] "r" (next),
@@ -137,5 +167,5 @@ pub noinline fn jump(prev: *usize, next: *usize) void {
 }
 
 const common = @import("common.zig");
-// const collection = @import("collection.zig");
+const page = @import("page.zig");
 const std = @import("std");

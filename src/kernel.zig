@@ -3,13 +3,12 @@ pub var context: common.Context = undefined;
 pub fn main() !void {
     try context.init();
 
-    _ = try context.process.alloc(@intFromPtr(&procAEntry));
-    _ = try context.process.alloc(@intFromPtr(&procBEntry));
+    _ = try context.process.alloc(@intFromPtr(&procAEntry), context.allocator);
+    _ = try context.process.alloc(@intFromPtr(&procBEntry), context.allocator);
 
     try common.print("{s}", .{"Hello Kernel!\n"});
 
-    const proc = context.process.nextToRun();
-    proc.run();
+    context.process.runNext();
 }
 
 fn procAEntry() void {
@@ -17,8 +16,7 @@ fn procAEntry() void {
 
     while (true) {
         common.putChar('A');
-        const next = context.process.nextToRun();
-        next.run();
+        context.process.runNext();
         common.delay();
     }
 }
@@ -28,8 +26,7 @@ fn procBEntry() void {
 
     while (true) {
         common.putChar('B');
-        const next = context.process.nextToRun();
-        next.run();
+        context.process.runNext();
         common.delay();
     }
 }
