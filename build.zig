@@ -45,32 +45,33 @@ pub fn build(builder: *std.Build) void {
     //const shell_obj = user_elf_copy.addOutputFileArg("user.bin.o");
 
     const exe = builder.addExecutable(.{
-        .name = "kernel.elf",
+        .name = "elf.elf",
         .root_module = builder.createModule(.{
-            .root_source_file = builder.path("src/kernel.zig"),
+            .root_source_file = builder.path("src/elf.zig"),
             .target = target,
             .optimize = optimize,
-            .strip = false,
+            //.strip = false,
         }),
     });
 
-    exe.entry = .disabled;
+    //exe.entry = .disabled;
 
     //exe.addObjectFile(shell_obj);
-    exe.setLinkerScript(builder.path("src/kernel.ld"));
+    //exe.setLinkerScript(builder.path("src/kernel.ld"));
     builder.installArtifact(exe);
 
-    const qemu_run = builder.addSystemCommand(&.{"qemu-system-riscv32"});
-    qemu_run.addArgs(&.{
-        "-machine", "virt",
-        "-bios", "default",
-        "-serial", "mon:stdio",
-        "-nographic", "--no-reboot", 
-        "-kernel"
-    });
+    //const qemu_run = builder.addSystemCommand(&.{"qemu-system-riscv32"});
+    //qemu_run.addArgs(&.{
+    //    "-machine", "virt",
+    //    "-bios", "default",
+    //    "-serial", "mon:stdio",
+    //    "-nographic", "--no-reboot", 
+    //    "-kernel"
+    //});
 
-    qemu_run.addArtifactArg(exe);
+    //qemu_run.addArtifactArg(exe);
 
-    const run_step = builder.step("run", "run QEMU");
-    run_step.dependOn(&qemu_run.step);
+    const run_step = builder.step("run", "Run the application");
+    run_step.dependOn(&exe.step);
+    //run_step.dependOn(&qemu_run.step);
 }
