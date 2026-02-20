@@ -6,10 +6,10 @@ pub const Sat = packed struct(u1) {
         spa: Sat,
     };
 
-    pub fn maskAddr(self: Sat, addr: usize) usize {
+    pub fn maskAddr(self: Sat, page: *PageTable) usize {
         const mask = Mask{
             .spa = self,
-            .addr = @intCast(addr / common.PAGE_SIZE),
+            .addr = @intCast(@intFromPtr(page) / common.PAGE_SIZE),
         };
 
         return @bitCast(mask);
@@ -17,7 +17,7 @@ pub const Sat = packed struct(u1) {
 };
 
 pub const PageTable = extern struct {
-    elements: [*]Element,
+    elements: [ELEMENT_COUNT]Element align(common.PAGE_SIZE),
 
     const Vpn = packed struct(u32) {
         offset: u12,
@@ -43,13 +43,11 @@ pub const PageTable = extern struct {
             self.flag = flag;
         }
 
-        fn getTable(self: *Element) PageTable {
+        fn getTable(self: *Element) *PageTable {
             const addr: usize = self.addr;
-            const elements: [*]Element = @ptrFromInt(addr * common.PAGE_SIZE);
+            const table: *PageTable = @ptrFromInt(addr * common.PAGE_SIZE);
 
-            return .{
-                .elements = elements,
-            };
+            return table;
         }
     };
 
@@ -58,23 +56,21 @@ pub const PageTable = extern struct {
     const SECOND_LEVEL_SHIFT: usize = 12;
     const ELEMENT_COUNT: usize = common.PAGE_SIZE / @sizeOf(usize);
 
-    pub fn init(allocator: std.mem.Allocator) !PageTable {
-        const alignment: std.mem.Alignment = @enumFromInt(12);
-        const elements = try allocator.allocWithOptions(Element, ELEMENT_COUNT, alignment, null);
-        @memset(elements, .{});
+    pub fn init(allocator: std.mem.Allocator) !*PageTable {
+        const table = try allocator.create(PageTable);
+        table.elements = .{Element{}} ** ELEMENT_COUNT;
 
-        return .{
-            .elements = elements.ptr,
-        };
+        return table;
     }
 
     pub fn mapAll(self: *PageTable, allocator: std.mem.Allocator) !void {
         const available_bytes: usize = @intFromPtr(common.free_ram_end) - @intFromPtr(common.kernel_base);
         const available_pages: usize = available_bytes / common.PAGE_SIZE;
-        // available_pages = 2;
+        common.print("AVAILABLE PAGES: {d}\n", .{available_pages}) catch @panic("PRINT");
 
         for (0..available_pages) |index| {
             const addr = @intFromPtr(common.kernel_base) + common.PAGE_SIZE * index;
+            //common.print("PAGE INDEX: {d}, PAGE ADDR: {x}\n", .{index, addr}) catch @panic("PRINT");
             try self.map(addr, addr, .{ .read = true, .write = true, .execute = true, .valid = true }, allocator);
         }
     }
@@ -92,14 +88,14 @@ pub const PageTable = extern struct {
 
         if (!self.elements[vpn.one].flag.valid) {
             const child = try PageTable.init(allocator);
-            self.elements[vpn.one].init(@intFromPtr(child.elements), .{ .valid = true });
-            // common.print("FIRST LEVEL: {*}, {x}, VADDR: {x}\n", .{ child.elements, self.elements[vpn.one].addr, vaddr }) catch @panic("PRINT");
+            self.elements[vpn.one].init(@intFromPtr(child), .{ .valid = true });
+            common.print("FIRST LEVEL: {*}, {x}, VADDR: {x}\n", .{ child, self.elements[vpn.one].addr, vaddr }) catch @panic("PRINT");
         }
 
         const table0 = self.elements[vpn.one].getTable();
         table0.elements[vpn.zero].init(paddr, flags);
 
-        // common.print("SECOND LEVEL: {*}, {x}, VADDR: {x}\n", .{ table0.elements, table0.elements[vpn.zero].addr, vaddr }) catch @panic("PRINT");
+        // common.print("SECOND LEVEL: {*}, {x}, VADDR: {x}\n", .{ table0.elements, table0.elements[vpn.zero].addr, vaddr }) catch @panic("PRINT");  8026b000, 80259000
     }
 
     pub fn ptr(self: *PageTable) usize {

@@ -19,6 +19,8 @@ pub const Context = struct {
         const ram_len: usize = @intFromPtr(free_ram_end) - @intFromPtr(free_ram);
         const ram = free_ram[0..ram_len];
 
+        print("KERNEL BASE: {*}, free_ram_end: {*}\n", .{kernel_base, free_ram_end}) catch @panic("PRINT");
+
         self.buffer_allocator = std.heap.FixedBufferAllocator.init(ram);
         self.allocator = self.buffer_allocator.allocator();
         self.process = try process.ProcessHandler.init(self.allocator);

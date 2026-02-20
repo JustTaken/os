@@ -6,16 +6,29 @@ pub const Process = struct {
     stack: [STACK_SIZE]u8 align(4),
     node: List.Node,
     prev: ?*Process,
-    page_table: page.PageTable,
+    page_table: *page.PageTable,
 
-    const STACK_SIZE: usize = 8192;
+    const STACK_SIZE: usize = 2 * 8192;
 
     pub fn run(self: *Process) void {
         if (self.prev) |other| {
             const next = &self.sp;
             const prev = &other.sp;
 
-            jump(prev, next);
+            _ = asm volatile (
+                \\addi sp, sp, -2 * 4
+                \\sw a0, 0 * 4(sp)
+                \\sw a1, 1 * 4(sp)
+                \\mv a0, %[prev]
+                \\mv a1, %[next]
+                \\call switch_assembly
+                \\sw a0, 0 * 4(sp)
+                \\sw a1, 1 * 4(sp)
+                \\addi sp, sp, 2 * 4
+                :
+                : [prev] "r" (prev),
+                  [next] "r" (next),
+            );
         } else @panic("NO PREVIOUS PROCESS TO GO AFTER");
     }
 
@@ -35,7 +48,7 @@ pub const Process = struct {
         self.sp = @intFromPtr(sp);
 
         self.page_table = try page.PageTable.init(allocator);
-        common.print("PROCESS PAGE TABLE: {*}\n", .{self.page_table.elements}) catch @panic("PRINT");
+        common.print("PAGE TABLE: {*}\n", .{self.page_table}) catch @panic("PRINT");
         try self.page_table.mapAll(allocator);
     }
 };
@@ -109,9 +122,10 @@ pub const ProcessHandler = struct {
         const runnable_stack: usize = @intFromPtr(&runnable.stack[0]) + Process.STACK_SIZE;
 
         const sat_mode = page.Sat{ .sv32 = true };
-        const runnable_page = sat_mode.maskAddr(runnable.page_table.ptr());
+        const runnable_page = sat_mode.maskAddr(runnable.page_table);
+        const pc: *usize = @ptrFromInt(runnable.sp);
 
-        common.print("SWAPPING PAGE TABLE: {*}\n", .{runnable.page_table.elements}) catch @panic("PRINT");
+        common.print("SWAPPING PAGE TABLE: {*}, {*}, pc: {x}\n", .{ runnable.page_table, &runnable.page_table.elements, pc.* }) catch @panic("PRINT");
 
         _ = asm volatile (
             \\sfence.vma
@@ -127,7 +141,7 @@ pub const ProcessHandler = struct {
     }
 };
 
-pub noinline fn jump(prev: *usize, next: *usize) void {
+export fn switch_assembly() callconv(.naked) void {
     _ = asm volatile (
         \\addi sp, sp, -13 * 4
         \\sw ra,  0  * 4(sp)
@@ -143,8 +157,8 @@ pub noinline fn jump(prev: *usize, next: *usize) void {
         \\sw s9,  10 * 4(sp)
         \\sw s10, 11 * 4(sp)
         \\sw s11, 12 * 4(sp)
-        \\sw sp, (%[arg0])
-        \\lw sp, (%[arg1])
+        \\sw sp, (a0)
+        \\lw sp, (a1)
         \\lw ra,  0  * 4(sp)
         \\lw s0,  1  * 4(sp)
         \\lw s1,  2  * 4(sp)
@@ -160,9 +174,6 @@ pub noinline fn jump(prev: *usize, next: *usize) void {
         \\lw s11, 12 * 4(sp)
         \\addi sp, sp, 13 * 4
         \\ret
-        :
-        : [arg0] "r" (prev),
-          [arg1] "r" (next),
     );
 }
 

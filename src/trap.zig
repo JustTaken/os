@@ -32,6 +32,25 @@ const TrapFrame = extern struct {
     sp: usize,
 };
 
+const Scause = enum(usize) {
+    instruction_misaligned = 0,
+    instuction_fault = 1,
+    illegal_instruction = 3,
+    breakpoint = 4,
+    load_fault = 5,
+    store_misaligned = 6,
+    store_fault = 7,
+    user_env_call = 8,
+    instruction_page_fault = 12,
+    load_page_fault = 13,
+    store_page_fault = 15,
+    unknown,
+
+    pub fn fromInt(u: usize) Scause {
+        return std.meta.intToEnum(Scause, u) catch .unknown;
+    }
+};
+
 pub fn setTrapEntry() void {
     common.writeCSR("stvec", @intFromPtr(&kernelTrapEntry));
 }
@@ -43,7 +62,7 @@ export fn handleTrap(frame: *TrapFrame) noreturn {
     const stval = common.readCSR("stval");
     const user_pc = common.readCSR("sepc");
 
-    std.debug.panic("unexpectep trap scause={x}, stval={x}, user_pc={x}", .{ scause, stval, user_pc });
+    std.debug.panic("unexpectep trap scause={s}, stval={x}, user_pc={x}", .{ @tagName(Scause.fromInt(scause)), stval, user_pc });
 }
 
 export fn kernelTrapEntry() align(4) callconv(.naked) void {
