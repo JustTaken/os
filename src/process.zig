@@ -49,12 +49,14 @@ pub const Process = struct {
 
             self.vaddr = std.mem.alignBackward(usize, header.vaddr, common.PAGE_SIZE);
             const vaddr_diff = header.vaddr - self.vaddr;
-            self.mem_size = header.mem_size + vaddr_diff;
+            const mem_size = header.mem_size + vaddr_diff;
             self.flag = header.flags;
 
-            const allocation_size = std.mem.alignForward(usize, self.mem_size, common.PAGE_SIZE);
+            self.mem_size = std.mem.alignForward(usize, mem_size, common.PAGE_SIZE);
 
-            self.bytes = try allocator.alignedAlloc(u8, @enumFromInt(12), allocation_size);
+
+            self.bytes = try allocator.alignedAlloc(u8, @enumFromInt(12), self.mem_size);
+            common.print("self_mem_size: {x}, header_mem_size: {x}, header_vaddr: {x}, self_vaddr: {x}, len: {x}\n", .{self.mem_size, header.mem_size, header.vaddr, self.vaddr, self.bytes.len}) catch @panic("PRINT");
 
             if (last_load) |last| {
                 const last_occupied = last.vaddr + last.mem_size;
