@@ -1,4 +1,4 @@
-const TrapFrame = extern struct {
+pub const TrapFrame = extern struct {
     ra: usize,
     gp: usize,
     tp: usize,
@@ -41,7 +41,7 @@ const Scause = enum(usize) {
     load_access_fault = 5,
     store_misaligned = 6,
     store_fault = 7,
-    user_env_call = 8,
+    user_ecall = 8,
     instruction_page_fault = 12,
     load_page_fault = 13,
     store_page_fault = 15,
@@ -56,15 +56,19 @@ pub fn setTrapEntry() void {
     common.writeCSR("stvec", @intFromPtr(&kernelTrapEntry));
 }
 
-export fn handleTrap(frame: *TrapFrame) noreturn {
-    _ = frame;
-
+export fn handleTrap(frame: *TrapFrame) void {
     const scause = common.readCSR("scause");
     const stval = common.readCSR("stval");
     const user_pc = common.readCSR("sepc");
-    const scause_name = @tagName(Scause.fromInt(scause));
+    const cause = Scause.fromInt(scause);
 
-    std.debug.panic("unexpectep trap scause={s}, stval={x}, user_pc={x}", .{ scause_name,  stval, user_pc });
+    if (cause == .user_ecall) {
+        syscall.handle(frame);
+        common.writeCSR("sepc", user_pc + 4);
+    } else {
+        const scause_name = @tagName(cause);
+        std.debug.panic("unexpectep trap scause={s}, stval={x}, user_pc={x}", .{ scause_name,  stval, user_pc });
+    }
 }
 
 export fn kernelTrapEntry() align(4) callconv(.naked) void {
@@ -145,4 +149,5 @@ export fn kernelTrapEntry() align(4) callconv(.naked) void {
 }
 
 const common = @import("common.zig");
+const syscall = @import("syscall.zig");
 const std = @import("std");

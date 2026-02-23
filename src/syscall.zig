@@ -1,3 +1,8 @@
+pub const Call = enum(usize) {
+    putchar = 0x1,
+    _,
+};
+
 pub const SbiReturn = struct {
     err: isize,
     value: isize,
@@ -26,3 +31,17 @@ pub fn sbi_call(arg0: isize, arg1: isize, arg2: isize, arg3: isize, arg4: isize,
         .value = value,
     };
 }
+
+pub fn handle(frame: *trap.TrapFrame) void {
+    const call: Call = @enumFromInt(frame.a3);
+    switch (call) {
+        .putchar => common.putChar(@intCast(frame.a0)),
+        _ => {
+            std.debug.panic("Unexpected syscall {d}\n", .{frame.a3});
+        }
+    }
+}
+
+const common = @import("common.zig");
+const trap = @import("trap.zig");
+const std = @import("std");
