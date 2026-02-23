@@ -32,24 +32,99 @@ pub const Process = struct {
         } else @panic("NO PREVIOUS PROCESS TO GO AFTER");
     }
 
+    const Load = struct {
+        vaddr: usize,
+        offset: usize,
+        mem_size: usize,
+        flag: elf.Elf.ProgramHeader.Flag,
+        bytes: []u8,
+
+        fn init(header: elf.Elf.ProgramHeader.T, last_load: ?Load, bytes: []const u8, allocator: std.mem.Allocator) !?Load {
+            if (header.typ != .load) return null;
+
+            var self: Load = undefined;
+
+            const start = header.offset;
+            const end = start  + header.file_size;
+
+            self.vaddr = std.mem.alignBackward(usize, header.vaddr, common.PAGE_SIZE);
+            const vaddr_diff = header.vaddr - self.vaddr;
+            self.mem_size = header.mem_size + vaddr_diff;
+            self.flag = header.flags;
+
+            const allocation_size = std.mem.alignForward(usize, self.mem_size, common.PAGE_SIZE);
+
+            self.bytes = try allocator.alignedAlloc(u8, @enumFromInt(12), allocation_size);
+
+            if (last_load) |last| {
+                const last_occupied = last.vaddr + last.mem_size;
+
+                if (last_occupied > self.vaddr) {
+                    const copy_start = self.vaddr - last.vaddr;
+                    const copy_end = copy_start + last_occupied - self.vaddr;
+                    const copy_len = copy_end - copy_start;
+
+                    @memcpy(self.bytes[0..copy_len], last.bytes[copy_start..copy_end]);
+                }
+            }
+
+            const bytes_start = vaddr_diff;
+
+            @memcpy(self.bytes[bytes_start..bytes_start + header.file_size], bytes[start..end]);
+
+            return self;
+        }
+    };
+
+    fn fromElfBytes(self: *Process, bytes: []const u8, pid: usize, allocator: std.mem.Allocator) !void {
+        const elf_file = try elf.Elf.fromBytes(bytes, allocator);
+        const entry_point = elf_file.header.entry;
+
+        try self.init(pid, entry_point, allocator);
+
+        var last_load: ?Load = null;
+        var loads = try std.ArrayList(Load).initCapacity(allocator, elf_file.program_headers.len);
+
+        for (elf_file.program_headers) |program_header| {
+            const load = try Load.init(program_header, last_load, bytes, allocator) orelse continue;
+            loads.appendAssumeCapacity(load);
+            last_load = load;
+        }
+
+        for (loads.items) |load| {
+            const paddr = @intFromPtr(load.bytes.ptr);
+            const vaddr = load.vaddr;
+            const size = load.mem_size;
+            const flag = page.PageTable.Flag.fromElfFlag(load.flag, true);
+
+            try self.page_table.mapRange(vaddr, paddr, size, flag, allocator);
+        }
+    }
+
     fn init(self: *Process, pid: usize, pc: usize, allocator: std.mem.Allocator) !void {
         self.stack = .{0} ** STACK_SIZE;
         self.prev = null;
         self.pid = pid;
 
-        const register_count: usize = 13; // s0 - s11 + ra
+        const register_count: usize = 14; // s0 - s11 + ra + user_entry
         const sp: [*]usize = @ptrCast(@alignCast(&self.stack[Process.STACK_SIZE - register_count * @sizeOf(usize)]));
 
         sp[0] = pc;
-        for (1..register_count) |i| {
+        sp[1] = @intFromPtr(&user_entry);
+        for (2..register_count) |i| {
             sp[i] = 0;
         }
 
-        self.sp = @intFromPtr(sp);
-
+        self.sp = @intFromPtr(sp) + 1 * @sizeOf(usize);
         self.page_table = try page.PageTable.init(allocator);
-        common.print("PAGE TABLE: {*}\n", .{self.page_table}) catch @panic("PRINT");
-        try self.page_table.mapAll(allocator);
+
+        const addr_base: usize = @intFromPtr(common.kernel_base);
+        const addr_end: usize = @intFromPtr(common.free_ram_end);
+        const flag: page.PageTable.Flag = .{ .read = true, .write = true, .execute = true, .valid = true };
+
+        common.print("CREATING PAGE TABLE: {*}\n", .{self.page_table}) catch @panic("PRINT");
+
+        try self.page_table.mapRange(addr_base, addr_base, addr_end - addr_base, flag, allocator);
     }
 };
 
@@ -107,6 +182,17 @@ pub const ProcessHandler = struct {
         return proc;
     }
 
+    pub fn allocFromElf(self: *ProcessHandler, bytes: []const u8, allocator: std.mem.Allocator) !*Process {
+        const proc = self.getUnused() orelse return error.OutOfUnusedProcess;
+        defer self.pid += 1;
+
+        try proc.fromElfBytes(bytes, self.pid, allocator);
+
+        self.runnable.append(&proc.node);
+
+        return proc;
+    }
+
     pub fn runNext(self: *ProcessHandler) void {
         const runnable = self.getRunnable() orelse @panic("OUT OF RUNNABLE PROCESS");
 
@@ -125,7 +211,7 @@ pub const ProcessHandler = struct {
         const runnable_page = sat_mode.maskAddr(runnable.page_table);
         const pc: *usize = @ptrFromInt(runnable.sp);
 
-        common.print("SWAPPING PAGE TABLE: {*}, {*}, pc: {x}\n", .{ runnable.page_table, &runnable.page_table.elements, pc.* }) catch @panic("PRINT");
+        common.print("SWAPPING PAGE TABLE: {*}, pc: {x}\n", .{ runnable.page_table, pc.* }) catch @panic("PRINT");
 
         _ = asm volatile (
             \\sfence.vma
@@ -140,6 +226,20 @@ pub const ProcessHandler = struct {
         runnable.run();
     }
 };
+
+const SSTATUS_SPIE: usize = 1 << 5;
+export fn user_entry() callconv(.naked) void {
+    _ = asm volatile (
+        \\addi sp, sp, -14 * 4
+        \\lw a0, 0 * 4(sp)
+        \\addi sp, sp, 14 * 4
+        \\csrw sepc, a0
+        \\csrw sstatus, %[sstatus]
+        \\sret
+        :
+        : [sstatus] "r" (SSTATUS_SPIE),
+    );
+}
 
 export fn switch_assembly() callconv(.naked) void {
     _ = asm volatile (
@@ -178,5 +278,6 @@ export fn switch_assembly() callconv(.naked) void {
 }
 
 const common = @import("common.zig");
+const elf = @import("elf.zig");
 const page = @import("page.zig");
 const std = @import("std");

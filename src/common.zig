@@ -10,6 +10,8 @@ pub const paddr = usize;
 pub const vaddr = usize;
 pub const PAGE_SIZE: usize = 4096;
 
+pub const user_application = @embedFile("user.elf");
+
 pub const Context = struct {
     process: process.ProcessHandler,
     buffer_allocator: std.heap.FixedBufferAllocator,
@@ -18,8 +20,6 @@ pub const Context = struct {
     pub fn init(self: *Context) !void {
         const ram_len: usize = @intFromPtr(free_ram_end) - @intFromPtr(free_ram);
         const ram = free_ram[0..ram_len];
-
-        print("KERNEL BASE: {*}, free_ram_end: {*}\n", .{kernel_base, free_ram_end}) catch @panic("PRINT");
 
         self.buffer_allocator = std.heap.FixedBufferAllocator.init(ram);
         self.allocator = self.buffer_allocator.allocator();

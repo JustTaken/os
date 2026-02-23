@@ -19,22 +19,39 @@ pub const Sat = packed struct(u1) {
 pub const PageTable = extern struct {
     elements: [ELEMENT_COUNT]Element align(common.PAGE_SIZE),
 
-    const Vpn = packed struct(u32) {
+    pub const Vpn = packed struct(u32) {
         offset: u12,
         zero: u10,
         one: u10,
     };
 
-    const Flag = packed struct(u10) {
+    pub const Flag = packed struct(u10) {
         valid: bool = false,
         read: bool = false,
         write: bool = false,
         execute: bool = false,
         user: bool = false,
         _: u5 = 0,
+
+        pub fn fromElfFlag(flag: elf.Elf.ProgramHeader.Flag, user: bool) Flag {
+            var self: Flag = .{};
+            _ = flag;
+
+            self.valid = true;
+            //self.read = flag.r;
+            self.read = true;
+            self.write = true;
+            self.execute = true;
+            //self.write = flag.w;
+            //self.execute = flag.x;
+            self.user = user;
+            //self.user = false;
+
+            return self;
+        }
     };
 
-    const Element = packed struct(u32) {
+    pub const Element = packed struct(u32) {
         flag: Flag = .{},
         addr: u22 = 0,
 
@@ -63,17 +80,25 @@ pub const PageTable = extern struct {
         return table;
     }
 
-    pub fn mapAll(self: *PageTable, allocator: std.mem.Allocator) !void {
-        const available_bytes: usize = @intFromPtr(common.free_ram_end) - @intFromPtr(common.kernel_base);
-        const available_pages: usize = available_bytes / common.PAGE_SIZE;
-        common.print("AVAILABLE PAGES: {d}\n", .{available_pages}) catch @panic("PRINT");
+    pub fn mapRange(self: *PageTable, vstart: usize, pstart: usize, size: usize, flag: Flag, allocator: std.mem.Allocator) !void {
+        const available_pages: usize = size / common.PAGE_SIZE;
+        //common.print("AVAILABLE PAGES: {d}\n", .{available_pages}) catch @panic("PRINT");
 
         for (0..available_pages) |index| {
-            const addr = @intFromPtr(common.kernel_base) + common.PAGE_SIZE * index;
+            const page_offset = common.PAGE_SIZE * index;
+            const vaddr = vstart + page_offset;
+            const paddr = pstart + page_offset;
+
+            try self.map(vaddr, paddr, flag, allocator);
+
             //common.print("PAGE INDEX: {d}, PAGE ADDR: {x}\n", .{index, addr}) catch @panic("PRINT");
-            try self.map(addr, addr, .{ .read = true, .write = true, .execute = true, .valid = true }, allocator);
+            //try self.map(addr, addr, .{ .read = true, .write = true, .execute = true, .valid = true }, allocator);
         }
     }
+
+    //pub fn mapAll(self: *PageTable, allocator: std.mem.Allocator) !void {
+    //    const available_bytes: usize = @intFromPtr(common.free_ram_end) - @intFromPtr(common.kernel_base);
+    //}
 
     pub fn map(self: *PageTable, vaddr: common.vaddr, paddr: common.paddr, flags: Flag, allocator: std.mem.Allocator) !void {
         if (!std.mem.isAligned(vaddr, common.PAGE_SIZE)) {
@@ -89,7 +114,7 @@ pub const PageTable = extern struct {
         if (!self.elements[vpn.one].flag.valid) {
             const child = try PageTable.init(allocator);
             self.elements[vpn.one].init(@intFromPtr(child), .{ .valid = true });
-            common.print("FIRST LEVEL: {*}, {x}, VADDR: {x}\n", .{ child, self.elements[vpn.one].addr, vaddr }) catch @panic("PRINT");
+            //common.print("FIRST LEVEL: {*}, {x}, VADDR: {x}\n", .{ child, self.elements[vpn.one].addr, vaddr }) catch @panic("PRINT");
         }
 
         const table0 = self.elements[vpn.one].getTable();
@@ -104,4 +129,5 @@ pub const PageTable = extern struct {
 };
 
 const common = @import("common.zig");
+const elf = @import("elf.zig");
 const std = @import("std");

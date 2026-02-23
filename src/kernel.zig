@@ -3,8 +3,10 @@ pub var context: common.Context = undefined;
 pub fn main() !void {
     try context.init();
 
-    _ = try context.process.alloc(@intFromPtr(&procAEntry), context.allocator);
-    _ = try context.process.alloc(@intFromPtr(&procBEntry), context.allocator);
+    //_ = try context.process.alloc(@intFromPtr(&procAEntry), context.allocator);
+    //_ = try context.process.alloc(@intFromPtr(&procBEntry), context.allocator);
+
+    _ = try context.process.allocFromElf(common.user_application, context.allocator);
 
     try common.print("{s}", .{"Hello Kernel!\n"});
 
@@ -12,20 +14,14 @@ pub fn main() !void {
 }
 
 fn procAEntry() void {
-    common.print("{s}", .{"A PROCESS!\n"}) catch @panic("PRINT");
-
     while (true) {
-        common.putChar('A');
         context.process.runNext();
         common.delay();
     }
 }
 
 fn procBEntry() void {
-    common.print("{s}", .{"B PROCESS!\n"}) catch @panic("PRINT");
-
     while (true) {
-        common.putChar('B');
         context.process.runNext();
         common.delay();
     }

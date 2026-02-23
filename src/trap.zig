@@ -35,9 +35,10 @@ const TrapFrame = extern struct {
 const Scause = enum(usize) {
     instruction_misaligned = 0,
     instuction_fault = 1,
-    illegal_instruction = 3,
-    breakpoint = 4,
-    load_fault = 5,
+    illegal_instruction = 2,
+    breakpoint = 3,
+    load_address_misaligned = 4,
+    load_access_fault = 5,
     store_misaligned = 6,
     store_fault = 7,
     user_env_call = 8,
@@ -61,8 +62,9 @@ export fn handleTrap(frame: *TrapFrame) noreturn {
     const scause = common.readCSR("scause");
     const stval = common.readCSR("stval");
     const user_pc = common.readCSR("sepc");
+    const scause_name = @tagName(Scause.fromInt(scause));
 
-    std.debug.panic("unexpectep trap scause={s}, stval={x}, user_pc={x}", .{ @tagName(Scause.fromInt(scause)), stval, user_pc });
+    std.debug.panic("unexpectep trap scause={s}, stval={x}, user_pc={x}", .{ scause_name,  stval, user_pc });
 }
 
 export fn kernelTrapEntry() align(4) callconv(.naked) void {
