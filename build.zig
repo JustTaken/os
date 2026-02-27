@@ -62,6 +62,8 @@ fn runQemu(exe: *std.Build.Step.Compile, builder: *std.Build) void {
         "-nographic", "--no-reboot", 
         "-d", "unimp,guest_errors,int,cpu_reset",
         "-D", "qemu.log",
+        "-drive", "id=drive0,file=asset/disk.tar,format=raw,if=none",
+        "-device", "virtio-blk-device,drive=drive0,bus=virtio-mmio-bus.0",
         "-kernel"
     });
 
@@ -69,41 +71,4 @@ fn runQemu(exe: *std.Build.Step.Compile, builder: *std.Build) void {
 
     const run_step = builder.step("run", "Run the application");
     run_step.dependOn(&qemu_run.step);
-}
-
-fn addUserEntry(exe: *std.Build.Step.Compile, target: std.Build.ResolvedTarget, optimize: std.Build.OptimizeMode, builder: *std.Build) *std.Build.Step.Compile {
-    const user_exe = builder.addExecutable(.{
-        .name = "user.bin",
-        .root_module = builder.createModule(.{
-            .root_source_file = builder.path("src/user.zig"),
-            .target = target,
-            .optimize = optimize,
-            .strip = false,
-        }),
-    });
-
-    user_exe.entry = .disabled;
-    user_exe.setLinkerScript(builder.path("src/user.ld"));
-
-    const user_elf =builder.addSystemCommand(&.{
-        "llvm-objcopy",
-
-        "--set-section-flags",
-        ".bss=alloc,contents",
-        "-O",
-        "binary",
-    });
-
-    user_elf.addArtifactArg(user_exe);
-    const user_bin = user_elf.addOutputFileArg("user.bin");
-
-    const user_elf_copy = builder.addSystemCommand(&.{
-        "llvm-objcopy",
-        "-Ibinary",
-        "-Oelf32-littleriscv",
-    });
-
-    user_elf_copy.addFileArg(user_bin);
-    const shell_obj = user_elf_copy.addOutputFileArg("user.bin.o");
-    exe.addObjectFile(shell_obj);
 }

@@ -8,14 +8,21 @@ pub const kernel_base = @extern([*]u8, .{ .name = "__kernel_base" });
 
 pub const paddr = usize;
 pub const vaddr = usize;
+pub const PAGE_BITS: usize = 12;
+pub const PAGE_ALIGNMENT: std.mem.Alignment = @enumFromInt(PAGE_BITS);
 pub const PAGE_SIZE: usize = 4096;
+pub const SECTOR_SIZE: usize = 512;
 
 pub const user_application = @embedFile("user.elf");
+
+pub var context: Context = undefined;
 
 pub const Context = struct {
     process: process.ProcessHandler,
     buffer_allocator: std.heap.FixedBufferAllocator,
     allocator: std.mem.Allocator,
+    block: virtio.Virtio.Block,
+    file_system: file_system.FileSystem,
 
     pub fn init(self: *Context) !void {
         const ram_len: usize = @intFromPtr(free_ram_end) - @intFromPtr(free_ram);
@@ -23,7 +30,14 @@ pub const Context = struct {
 
         self.buffer_allocator = std.heap.FixedBufferAllocator.init(ram);
         self.allocator = self.buffer_allocator.allocator();
+
+        self.block = try virtio.Virtio.Block.init(self.allocator);
+        self.file_system = try file_system.FileSystem.init(&self.block);
         self.process = try process.ProcessHandler.init(self.allocator);
+    }
+
+    pub fn deinit(self: *Context) void {
+        self.file_system.flush(&self.block);
     }
 };
 
@@ -32,8 +46,8 @@ const console: std.io.AnyWriter = .{
     .writeFn = write,
 };
 
-fn write(context: *const anyopaque, bytes: []const u8) anyerror!usize {
-    _ = context;
+fn write(ctx: *const anyopaque, bytes: []const u8) anyerror!usize {
+    _ = ctx;
 
     for (bytes) |c| {
         putChar(c);
@@ -43,7 +57,12 @@ fn write(context: *const anyopaque, bytes: []const u8) anyerror!usize {
 }
 
 pub fn putChar(char: u8) void {
-    _ = syscall.sbi_call(char, 0, 0, 0, 0, 0, 0, 1);
+    _ = syscall.sbi_call(char, 0, 0, 0, 0, 0, 0, .putchar);
+}
+
+pub fn getChar() usize {
+    const ret = syscall.sbi_call(0, 0, 0, 0, 0, 0, 0, .getchar);
+    return ret.value1;
 }
 
 pub fn print(comptime fmt: []const u8, arguments: anytype) !void {
@@ -82,5 +101,7 @@ pub fn zeroBSSMemory() void {
 }
 
 const syscall = @import("syscall.zig");
-const std = @import("std");
 const process = @import("process.zig");
+const virtio = @import("virtio.zig");
+const file_system = @import("file_system.zig");
+const std = @import("std");

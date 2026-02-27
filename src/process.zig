@@ -32,31 +32,29 @@ pub const Process = struct {
         } else @panic("NO PREVIOUS PROCESS TO GO AFTER");
     }
 
-    const Load = struct {
+    const LoadProgramSegment = struct {
         vaddr: usize,
         offset: usize,
         mem_size: usize,
         flag: elf.Elf.ProgramHeader.Flag,
         bytes: []u8,
 
-        fn init(header: elf.Elf.ProgramHeader.T, last_load: ?Load, bytes: []const u8, allocator: std.mem.Allocator) !?Load {
+        fn init(header: elf.Elf.ProgramHeader.T, last_load: ?LoadProgramSegment, bytes: []const u8, allocator: std.mem.Allocator) !?LoadProgramSegment {
             if (header.typ != .load) return null;
 
-            var self: Load = undefined;
+            var self: LoadProgramSegment = undefined;
 
             const start = header.offset;
             const end = start  + header.file_size;
 
             self.vaddr = std.mem.alignBackward(usize, header.vaddr, common.PAGE_SIZE);
+
             const vaddr_diff = header.vaddr - self.vaddr;
             const mem_size = header.mem_size + vaddr_diff;
+
             self.flag = header.flags;
-
             self.mem_size = std.mem.alignForward(usize, mem_size, common.PAGE_SIZE);
-
-
-            self.bytes = try allocator.alignedAlloc(u8, @enumFromInt(12), self.mem_size);
-            common.print("self_mem_size: {x}, header_mem_size: {x}, header_vaddr: {x}, self_vaddr: {x}, len: {x}\n", .{self.mem_size, header.mem_size, header.vaddr, self.vaddr, self.bytes.len}) catch @panic("PRINT");
+            self.bytes = try allocator.alignedAlloc(u8, common.PAGE_ALIGNMENT, self.mem_size);
 
             if (last_load) |last| {
                 const last_occupied = last.vaddr + last.mem_size;
@@ -84,11 +82,11 @@ pub const Process = struct {
 
         try self.init(pid, entry_point, allocator);
 
-        var last_load: ?Load = null;
-        var loads = try std.ArrayList(Load).initCapacity(allocator, elf_file.program_headers.len);
+        var last_load: ?LoadProgramSegment = null;
+        var loads = try std.ArrayList(LoadProgramSegment).initCapacity(allocator, elf_file.program_headers.len);
 
         for (elf_file.program_headers) |program_header| {
-            const load = try Load.init(program_header, last_load, bytes, allocator) orelse continue;
+            const load = try LoadProgramSegment.init(program_header, last_load, bytes, allocator) orelse continue;
             loads.appendAssumeCapacity(load);
             last_load = load;
         }
@@ -127,6 +125,7 @@ pub const Process = struct {
         common.print("CREATING PAGE TABLE: {*}\n", .{self.page_table}) catch @panic("PRINT");
 
         try self.page_table.mapRange(addr_base, addr_base, addr_end - addr_base, flag, allocator);
+        try self.page_table.mapRange(virtio.Virtio.Block.PADDR, virtio.Virtio.Block.PADDR, common.PAGE_SIZE, .{ .read = true, .write = true, .valid = true }, allocator);
     }
 };
 
@@ -172,7 +171,7 @@ pub const ProcessHandler = struct {
         return @fieldParentPtr("node", n);
     }
 
-    pub fn alloc(self: *ProcessHandler, pc: usize, allocator: std.mem.Allocator) !*Process {
+    pub fn alloc(self: *ProcessHandler, pc: usize, allocator: std.mem.Allocator) !void {
         const proc = self.getUnused() orelse return error.OutOfUnusedProcess;
 
         defer self.pid += 1;
@@ -184,19 +183,17 @@ pub const ProcessHandler = struct {
         return proc;
     }
 
-    pub fn allocFromElf(self: *ProcessHandler, bytes: []const u8, allocator: std.mem.Allocator) !*Process {
+    pub fn allocFromElf(self: *ProcessHandler, bytes: []const u8, allocator: std.mem.Allocator) !void {
         const proc = self.getUnused() orelse return error.OutOfUnusedProcess;
         defer self.pid += 1;
 
         try proc.fromElfBytes(bytes, self.pid, allocator);
 
         self.runnable.append(&proc.node);
-
-        return proc;
     }
 
     pub fn runNext(self: *ProcessHandler) void {
-        const runnable = self.getRunnable() orelse @panic("OUT OF RUNNABLE PROCESS");
+        const runnable = self.getRunnable() orelse return;
 
         if (self.getRunning()) |running| {
             self.runnable.append(&running.node);
@@ -208,12 +205,8 @@ pub const ProcessHandler = struct {
         self.running.append(&runnable.node);
 
         const runnable_stack: usize = @intFromPtr(&runnable.stack[0]) + Process.STACK_SIZE;
-
         const sat_mode = page.Sat{ .sv32 = true };
         const runnable_page = sat_mode.maskAddr(runnable.page_table);
-        const pc: *usize = @ptrFromInt(runnable.sp);
-
-        common.print("SWAPPING PAGE TABLE: {*}, pc: {x}\n", .{ runnable.page_table, pc.* }) catch @panic("PRINT");
 
         _ = asm volatile (
             \\sfence.vma
@@ -229,7 +222,19 @@ pub const ProcessHandler = struct {
     }
 };
 
-const SSTATUS_SPIE: usize = 1 << 5;
+const Sstatus = packed struct(u32) {
+    _1: u4 = 0,
+    spie: bool = false,
+    _2: u12 = 0,
+    sum: bool = false,
+    _3: u14 = 0,
+};
+
+const sstatus: usize = @bitCast(Sstatus {
+    .spie = true,
+    .sum = true,
+});
+
 export fn user_entry() callconv(.naked) void {
     _ = asm volatile (
         \\addi sp, sp, -14 * 4
@@ -239,7 +244,7 @@ export fn user_entry() callconv(.naked) void {
         \\csrw sstatus, %[sstatus]
         \\sret
         :
-        : [sstatus] "r" (SSTATUS_SPIE),
+        : [sstatus] "r" (sstatus),
     );
 }
 
@@ -282,4 +287,5 @@ export fn switch_assembly() callconv(.naked) void {
 const common = @import("common.zig");
 const elf = @import("elf.zig");
 const page = @import("page.zig");
+const virtio = @import("virtio.zig");
 const std = @import("std");
